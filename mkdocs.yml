@@ -68,6 +68,7 @@ nav:
   - Concepts:
     - concepts/index.md
     - The Ralph Wiggum Technique: concepts/ralph-wiggum-technique.md
+    - From Loop to Workflow: concepts/from-loop-to-workflow.md
     - The Six Tenets: concepts/tenets.md
     - Hats & Events: concepts/hats-and-events.md
     - Coordination Patterns: concepts/coordination-patterns.md
@@ -84,6 +85,9 @@ nav:
   - Advanced:
     - advanced/index.md
     - Architecture: advanced/architecture.md
+    - Orchestration Workflow: advanced/orchestration-workflow.md
+    - System Prompts: advanced/system-prompts.md
+    - Prompt Design: advanced/prompt-design.md
     - Creating Custom Hats: advanced/custom-hats.md
     - Event System Design: advanced/event-system.md
     - Memory System: advanced/memory-system.md
