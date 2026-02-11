@@ -16,11 +16,16 @@ Without orchestration, you'd coordinate multiple agents yourself:
 
 ```
 Terminal 1: "Plan the authentication module"
-[wait for plan...]
+  ↳ Work with the agent iteratively until you have a solid plan
+  ↳ Copy the final plan somewhere
+
 Terminal 2: "Implement the plan from Terminal 1"
-[wait for implementation...]
+  ↳ Paste the plan from Terminal 1
+  ↳ Wait for implementation...
+
 Terminal 3: "Review what Terminal 2 built"
-[find issues, go back to Terminal 2...]
+  ↳ Find issues, go back to Terminal 2...
+  ↳ Repeat until satisfied
 ```
 
 This requires you to:
@@ -32,7 +37,36 @@ This requires you to:
 
 ### The Ralph Way: Hats and Events
 
-Instead of manually coordinating, think in **stages**. At each stage, you want Ralph to have a different **persona** — different instructions, different focus.
+Instead of manually coordinating, imagine you're building a team to tackle your task. As with any team, you define two things: **roles** and **process**.
+
+1. **Roles**: Define a role for each unique stage (planning, implementing, reviewing)
+2. **Process**: Define how those roles work together to achieve your objective
+
+Ralph gives you the ability to do exactly that through **hats** and **events**.
+
+#### How It Works
+
+When you run `ralph run -p "your objective"`, you start an **orchestration loop**. The orchestrator keeps activating new Ralph iterations until either:
+- The objective is complete (`LOOP_COMPLETE` is emitted)
+- A terminal condition is reached (max iterations, max runtime, etc.)
+
+In each iteration, Ralph needs to figure out two things:
+1. **What should I do now?** (determined by which hat is active)
+2. **What event should I emit when I'm done?** (to hand off to the next stage)
+
+#### Hats: Roles for Your "Team of One"
+
+You only have one Ralph per loop — but you can define different **hats** that Ralph wears to play different roles. Each hat provides:
+
+- **`triggers`**: Which events activate this hat (e.g., `plan.start`)
+- **`instructions`**: What Ralph should do when wearing this hat
+- **`publishes`**: Which events Ralph can emit to hand off work
+
+#### Events: The Workflow Glue
+
+Events are how stages connect. When Ralph finishes work in one hat, it emits an event. That event triggers the next hat. This creates your workflow topology.
+
+Think of it as: **triggers** define *inputs*, **publishes** define *outputs*, and the orchestrator routes events between them.
 
 ```yaml
 # ralph.yml
@@ -54,26 +88,28 @@ hats:
     name: "🔨 Builder"
     description: "Implements tasks following existing patterns"
     triggers: ["build.task"]
-    publishes: ["build.done", "build.blocked"]
+    publishes: ["build.done", "build.blocked"]  # Ralph chooses ONE based on outcome
     instructions: |
       You are the implementer. Your job is to:
       1. Read the task from the event payload
       2. Implement it following existing patterns
       3. Run tests before declaring done
-      4. Emit build.done or build.blocked
+      4. Emit build.done if tests pass, or build.blocked if stuck
 
   reviewer:
     name: "🔍 Reviewer"
     description: "Reviews code for quality and security issues"
     triggers: ["build.done"]
-    publishes: ["review.approved", "review.changes_requested"]
+    publishes: ["review.approved", "review.changes_requested"]  # Ralph chooses ONE
     instructions: |
       You are the code reviewer. Your job is to:
       1. Check the recent commits
       2. Verify tests exist and pass
       3. Look for security issues
-      4. Emit review.approved or review.changes_requested
+      4. Emit review.approved if quality is good, or review.changes_requested if issues found
 ```
+
+> **How does Ralph choose which event to emit?** The `publishes` list defines what events are *allowed*. Ralph reads the situation (tests passing? issues found?) and picks the appropriate one. Your `instructions` should guide this decision.
 
 Now run it:
 
@@ -208,11 +244,11 @@ This is one of Ralph's [Six Tenets](tenets.md): **Backpressure Over Prescription
 
 ## Scenario 4: Learning Across Sessions
 
-You've been running Ralph loops for weeks. Every time, the agent makes the same mistake: it forgets to update the changelog, or uses an old API pattern you've deprecated.
+You've been using Ralph on your project for weeks — running `ralph run` for various features, bug fixes, and refactoring tasks. Every time you start a new loop, the agent makes the same mistakes: it forgets to update the changelog, uses an old API pattern you've deprecated, or ignores your team's coding conventions.
 
 ### The Problem
 
-Each iteration starts with fresh context. The agent doesn't remember what it learned yesterday.
+Each Ralph loop starts fresh. Each iteration within a loop has fresh context. The agent doesn't remember what it learned in previous loops or even earlier iterations.
 
 ### The Ralph Way: Memories
 
@@ -263,57 +299,57 @@ The built-in events (`task.start`, `build.done`, etc.) don't match your workflow
 
 You can't find events that match your domain. The planner-builder-reviewer pattern doesn't fit your needs.
 
-### The Ralph Way: Custom Events with Metadata
+### The Ralph Way: Define Your Own Events
 
-Define your own events with their semantics:
+Events are just strings — you can use any names you want. The only "special" events are:
+
+- `task.start` / `task.resume` — Reserved for Ralph (loop entry points)
+- `LOOP_COMPLETE` — Terminates the loop (configurable via `completion_promise`)
+- `build.done` / `review.done` — Have optional backpressure validation
+
+Everything else is yours to define:
 
 ```yaml
 # ralph.yml
-events:
-  migrate.ready:
-    description: "Database schema changes are ready to apply"
-    on_trigger: "Run migrations in a transaction, verify schema matches ORM"
-    on_publish: "Only after all model changes are committed and tested"
-
-  deploy.staging:
-    description: "Code is ready for staging deployment"
-    on_trigger: "Build artifacts, push to staging, run smoke tests"
-    on_publish: "After all tests pass and migrations are verified"
-
-  monitor.setup:
-    description: "Monitoring and alerting should be configured"
-    on_trigger: "Add metrics endpoints, configure alerts, verify dashboards"
-    on_publish: "After successful staging deployment"
-
 hats:
   migrator:
     name: "🗃️ Migrator"
     description: "Applies database migrations in a transaction"
     triggers: ["migrate.ready"]
     publishes: ["deploy.staging", "migrate.failed"]
-    # Instructions auto-derived from event metadata above!
+    instructions: |
+      You are the database migration specialist. Your job is to:
+      1. Run migrations in a transaction
+      2. Verify schema matches ORM models
+      3. Emit deploy.staging if successful, migrate.failed if not
 
   deployer:
     name: "🚀 Deployer"
     description: "Builds artifacts and deploys to staging"
     triggers: ["deploy.staging"]
     publishes: ["monitor.setup", "deploy.rollback"]
+    instructions: |
+      You are the deployment engineer. Your job is to:
+      1. Build artifacts
+      2. Push to staging environment
+      3. Run smoke tests
+      4. Emit monitor.setup if successful, deploy.rollback if not
 
   ops:
     name: "📊 Ops"
     description: "Configures monitoring, metrics, and alerts"
     triggers: ["monitor.setup"]
-    publishes: ["LOOP_COMPLETE"]
+    publishes: []  # Terminal hat - Ralph will emit LOOP_COMPLETE
+    instructions: |
+      You are the ops engineer. Your job is to:
+      1. Add metrics endpoints
+      2. Configure alerts
+      3. Verify dashboards
+      When done, exit and let Ralph complete the loop.
+
+event_loop:
+  starting_event: "migrate.ready"  # Kick off your custom workflow
 ```
-
-### How Event Metadata Works
-
-When a hat has no explicit `instructions:`, Ralph auto-generates them from the event metadata:
-
-- `on_trigger` — What to do when receiving this event
-- `on_publish` — When/how to emit this event
-
-This keeps your YAML DRY — define event semantics once, reuse across hats.
 
 ### Event Naming Convention
 
@@ -337,7 +373,7 @@ Events use a `domain.action` naming convention (e.g., `build.done`, `deploy.stag
 | Enforce quality standards automatically | Backpressure |
 | Remember patterns and lessons across sessions | Memories |
 | Track current work items | Tasks |
-| Define workflow stages that match your domain | Custom Events |
+| Define workflow stages that match your domain | Custom events + hats with `starting_event` |
 
 ---
 
