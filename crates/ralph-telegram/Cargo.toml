@@ -25,6 +25,7 @@ chrono.workspace = true
 
 # Telegram bot framework
 teloxide.workspace = true
+reqwest.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true }
