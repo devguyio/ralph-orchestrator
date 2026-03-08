@@ -123,6 +123,7 @@ pub fn preset_names() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ralph_core::RalphConfig;
 
     #[test]
     fn test_list_presets_returns_all() {
@@ -207,5 +208,186 @@ mod tests {
         assert!(names.contains(&"merge-loop"));
         assert!(names.contains(&"code-assist"));
         assert!(names.contains(&"fresh-eyes"));
+    }
+
+    #[test]
+    fn test_review_uses_staged_adversarial_completion_contract() {
+        let preset = get_preset("review").expect("review preset should exist");
+        let config =
+            RalphConfig::parse_yaml(preset.content).expect("embedded preset YAML should parse");
+
+        assert_eq!(
+            config.event_loop.required_events,
+            vec![
+                "review.section".to_string(),
+                "analysis.complete".to_string()
+            ]
+        );
+
+        let reviewer = config
+            .hats
+            .get("reviewer")
+            .expect("reviewer hat should exist");
+        assert_eq!(
+            reviewer.triggers,
+            vec!["review.start".to_string(), "analysis.complete".to_string()]
+        );
+        assert_eq!(
+            reviewer.publishes,
+            vec!["review.section".to_string(), "REVIEW_COMPLETE".to_string()]
+        );
+        assert!(reviewer.instructions.contains("On `review.start`:"));
+        assert!(
+            reviewer
+                .instructions
+                .contains("Emit exactly one `review.section`")
+        );
+        assert!(reviewer.instructions.contains("On `analysis.complete`:"));
+        assert!(
+            reviewer
+                .instructions
+                .contains("Emit exactly one `REVIEW_COMPLETE`")
+        );
+        assert!(
+            reviewer
+                .instructions
+                .contains("❌ Emit `REVIEW_COMPLETE` on the initial `review.start` pass")
+        );
+
+        let analyzer = config
+            .hats
+            .get("analyzer")
+            .expect("analyzer hat should exist");
+        assert_eq!(analyzer.triggers, vec!["review.section".to_string()]);
+        assert_eq!(analyzer.publishes, vec!["analysis.complete".to_string()]);
+        assert_eq!(analyzer.default_publishes, None);
+        assert!(
+            analyzer
+                .instructions
+                .contains("Emit exactly one `analysis.complete`")
+        );
+        assert!(
+            analyzer
+                .instructions
+                .contains("adversarial or failure-path case")
+        );
+    }
+
+    #[test]
+    fn test_debug_uses_staged_adversarial_fix_contract() {
+        let preset = get_preset("debug").expect("debug preset should exist");
+        let config =
+            RalphConfig::parse_yaml(preset.content).expect("embedded preset YAML should parse");
+
+        assert_eq!(
+            config.event_loop.required_events,
+            vec![
+                "hypothesis.test".to_string(),
+                "hypothesis.confirmed".to_string(),
+                "fix.applied".to_string(),
+                "fix.verified".to_string(),
+            ]
+        );
+
+        let investigator = config
+            .hats
+            .get("investigator")
+            .expect("investigator hat should exist");
+        assert_eq!(
+            investigator.triggers,
+            vec![
+                "debug.start".to_string(),
+                "hypothesis.rejected".to_string(),
+                "hypothesis.confirmed".to_string(),
+                "fix.verified".to_string(),
+            ]
+        );
+        assert_eq!(
+            investigator.publishes,
+            vec![
+                "hypothesis.test".to_string(),
+                "fix.propose".to_string(),
+                "DEBUG_COMPLETE".to_string(),
+            ]
+        );
+        assert!(
+            investigator
+                .instructions
+                .contains("On `debug.start` or `hypothesis.rejected`:")
+        );
+        assert!(
+            investigator
+                .instructions
+                .contains("Emit exactly one `hypothesis.test`")
+        );
+        assert!(
+            investigator
+                .instructions
+                .contains("On `hypothesis.confirmed`:")
+        );
+        assert!(
+            investigator
+                .instructions
+                .contains("Emit exactly one `fix.propose`")
+        );
+        assert!(investigator.instructions.contains("On `fix.verified`:"));
+        assert!(
+            investigator
+                .instructions
+                .contains("Emit exactly one `DEBUG_COMPLETE`")
+        );
+        assert!(
+            investigator
+                .instructions
+                .contains("❌ Emit undeclared topics like `debug.start`")
+        );
+        assert!(
+            investigator
+                .instructions
+                .contains("❌ Skip the event chain by doing fix or verification work inline")
+        );
+
+        let tester = config.hats.get("tester").expect("tester hat should exist");
+        assert_eq!(tester.triggers, vec!["hypothesis.test".to_string()]);
+        assert_eq!(
+            tester.publishes,
+            vec![
+                "hypothesis.confirmed".to_string(),
+                "hypothesis.rejected".to_string(),
+            ]
+        );
+        assert!(
+            tester
+                .instructions
+                .contains("nearby adversarial or neighboring failure-path case")
+        );
+
+        let fixer = config.hats.get("fixer").expect("fixer hat should exist");
+        assert_eq!(
+            fixer.publishes,
+            vec!["fix.applied".to_string(), "fix.blocked".to_string()]
+        );
+        assert_eq!(fixer.default_publishes.as_deref(), Some("fix.blocked"));
+        assert!(!fixer.instructions.contains("Commit"));
+        assert!(
+            fixer
+                .instructions
+                .contains("❌ Make commits in this preset")
+        );
+
+        let verifier = config
+            .hats
+            .get("verifier")
+            .expect("verifier hat should exist");
+        assert_eq!(
+            verifier.publishes,
+            vec!["fix.verified".to_string(), "fix.failed".to_string()]
+        );
+        assert_eq!(verifier.default_publishes.as_deref(), Some("fix.failed"));
+        assert!(
+            verifier
+                .instructions
+                .contains("Re-run at least one nearby adversarial or failure-path case.")
+        );
     }
 }

@@ -747,25 +747,42 @@ impl EventLoop {
     ///
     /// Returns true if a fallback event was injected, false if recovery is not possible.
     pub fn inject_fallback_event(&mut self) -> bool {
-        let fallback_event = Event::new(
-            "task.resume",
-            "RECOVERY: Previous iteration did not publish an event. \
-             Review the scratchpad and either dispatch the next task or complete the loop.",
-        );
-
         // If a custom hat was last executing, target the fallback back to it
         // This preserves hat context instead of always falling back to Ralph
         let fallback_event = match &self.state.last_hat {
             Some(hat_id) if hat_id.as_str() != "ralph" => {
+                let publishes = self.get_hat_publishes(hat_id);
+                let payload = if publishes.is_empty() {
+                    format!(
+                        "RECOVERY: Previous iteration by hat `{}` did not publish an event. \
+                         Emit exactly one valid next event via `ralph emit`, or stop only after \
+                         publishing the configured completion event.",
+                        hat_id.as_str()
+                    )
+                } else {
+                    format!(
+                        "RECOVERY: Previous iteration by hat `{}` did not publish an event. \
+                         This failed because no event was emitted. Emit exactly ONE valid next \
+                         event via `ralph emit`. Allowed topics: `{}`. Do not only write prose \
+                         or update files. Stop immediately after emitting.",
+                        hat_id.as_str(),
+                        publishes.join("`, `")
+                    )
+                };
+
                 debug!(
                     hat = %hat_id.as_str(),
                     "Injecting fallback event to recover - targeting last hat with task.resume"
                 );
-                fallback_event.with_target(hat_id.clone())
+                Event::new("task.resume", payload).with_target(hat_id.clone())
             }
             _ => {
                 debug!("Injecting fallback event to recover - triggering Ralph with task.resume");
-                fallback_event
+                Event::new(
+                    "task.resume",
+                    "RECOVERY: Previous iteration did not publish an event. \
+                     Review the scratchpad and either dispatch the next task or complete the loop.",
+                )
             }
         };
 

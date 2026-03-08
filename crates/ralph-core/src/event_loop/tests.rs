@@ -3360,6 +3360,16 @@ hats:
         pending[0].target.as_ref().map(|id| id.as_str()),
         Some("planner")
     );
+    assert!(
+        pending[0]
+            .payload
+            .contains("Previous iteration by hat `planner` did not publish an event"),
+        "Fallback payload should name the stalled hat"
+    );
+    assert!(
+        pending[0].payload.contains("Allowed topics: `task.plan`"),
+        "Fallback payload should list allowed publish topics"
+    );
 
     let ralph_id = HatId::new("ralph");
     let ralph_pending = event_loop.bus.peek_pending(&ralph_id);
@@ -3381,6 +3391,7 @@ fn test_inject_fallback_event_defaults_to_ralph() {
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].topic.as_str(), "task.resume");
     assert!(pending[0].target.is_none());
+    assert!(pending[0].payload.contains("Review the scratchpad"));
 }
 
 #[test]

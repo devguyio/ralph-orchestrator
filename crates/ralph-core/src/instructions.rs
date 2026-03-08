@@ -155,12 +155,13 @@ impl InstructionBuilder {
             let topics: Vec<&str> = hat.publishes.iter().map(|t| t.as_str()).collect();
             let topics_list = topics.join(", ");
             let topics_backticked = format!("`{}`", topics.join("`, `"));
+            let example_topic = topics.first().copied().unwrap_or("event.name");
 
             (
                 format!("You publish to: {}", topics_list),
                 format!(
-                    "\n\nYou MUST publish one of these events: {}\nYou MUST NOT end the iteration without publishing because this will terminate the loop.",
-                    topics_backticked
+                    "\n\nYou MUST emit exactly ONE of these events via `ralph emit \"<topic>\" \"<summary>\"`: {}\nUse `ralph emit \"{}\" \"<summary>\"` as the pattern.\nPlain-language summaries do NOT count as event publication.\nYou MUST stop immediately after emitting.\nYou MUST NOT end the iteration without publishing because this will terminate the loop.",
+                    topics_backticked, example_topic
                 ),
             )
         };
@@ -185,7 +186,7 @@ You MUST NOT close tasks unless ALL conditions are met:
 - Build succeeds (if applicable)
 
 ### 3. REPORT
-You MUST publish a result event with evidence.
+You MUST publish a result event with evidence using `ralph emit`.
 {publish_topics}{must_publish}
 
 ### GUARDRAILS
@@ -241,7 +242,10 @@ mod tests {
 
         // Report phase with RFC2119
         assert!(instructions.contains("### 3. REPORT"));
-        assert!(instructions.contains("You MUST publish a result event"));
+        assert!(
+            instructions
+                .contains("You MUST publish a result event with evidence using `ralph emit`")
+        );
 
         // Guardrails section with high numbers
         assert!(instructions.contains("### GUARDRAILS"));
@@ -286,11 +290,15 @@ mod tests {
 
         // Must-publish rule should be injected even with explicit instructions (RFC2119)
         assert!(
-            instructions.contains("You MUST publish one of these events"),
+            instructions.contains("You MUST emit exactly ONE of these events via `ralph emit"),
             "Must-publish rule should be injected for custom hats with publishes"
         );
         assert!(instructions.contains("`review.approved`"));
         assert!(instructions.contains("`review.changes_requested`"));
+        assert!(
+            instructions.contains("Plain-language summaries do NOT count as event publication")
+        );
+        assert!(instructions.contains("You MUST stop immediately after emitting"));
         assert!(instructions.contains("You MUST NOT end the iteration without publishing"));
     }
 
@@ -304,9 +312,9 @@ mod tests {
 
         // No must-publish rule when hat has no publishes
         // Note: The prompt says "You MUST publish a result event" in the REPORT section,
-        // but the specific "You MUST publish one of these events:" list should not appear
+        // but the specific emitted-topics list should not appear
         assert!(
-            !instructions.contains("You MUST publish one of these events"),
+            !instructions.contains("You MUST emit exactly ONE of these events via `ralph emit"),
             "Specific must-publish list should NOT be injected when hat has no publishes"
         );
     }

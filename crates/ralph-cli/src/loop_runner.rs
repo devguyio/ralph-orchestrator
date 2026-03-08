@@ -1188,6 +1188,72 @@ pub async fn run_loop_impl(
                 id.clone()
             }
             None => {
+                match recover_late_events_before_fallback(&mut event_loop)
+                    .inspect_err(
+                        |e| warn!(error = %e, "Failed to drain late JSONL events before fallback"),
+                    )
+                    .ok()
+                {
+                    Some(LateEventRecovery::PendingWork) => {
+                        debug!(
+                            "Recovered late JSONL events before fallback; retrying hat selection"
+                        );
+                        consecutive_fallbacks = 0;
+                        continue;
+                    }
+                    Some(LateEventRecovery::Terminate(reason)) => {
+                        let reason = dispatch_pre_loop_termination_hooks(
+                            &event_loop,
+                            hooks_dispatch_enabled,
+                            &loop_id,
+                            &hook_engine,
+                            &hook_executor,
+                            &suspend_state_store,
+                            &ctx,
+                            config.event_loop.max_iterations,
+                            &mut accumulated_hook_metadata,
+                            reason,
+                        )
+                        .await?;
+
+                        let terminate_event = event_loop.publish_terminate_event(&reason);
+                        log_terminate_event(
+                            &mut event_logger,
+                            event_loop.state().iteration,
+                            &terminate_event,
+                        );
+
+                        let reason = dispatch_post_loop_termination_hooks(
+                            &event_loop,
+                            hooks_dispatch_enabled,
+                            &loop_id,
+                            &hook_engine,
+                            &hook_executor,
+                            &suspend_state_store,
+                            &ctx,
+                            config.event_loop.max_iterations,
+                            &mut accumulated_hook_metadata,
+                            reason,
+                        )
+                        .await?;
+
+                        handle_termination(
+                            &reason,
+                            event_loop.state(),
+                            &config.core.scratchpad,
+                            &loop_history,
+                            &loop_context,
+                            auto_merge,
+                            &prompt_content,
+                        );
+                        if let Some(handle) = tui_handle.take() {
+                            let _ = handle.await;
+                        }
+                        return Ok(reason);
+                    }
+                    Some(LateEventRecovery::NoLateEvents) | None => {}
+                }
+
                 // No pending events - try to recover by injecting a fallback event
                 // This triggers the built-in planner to assess the situation
                 consecutive_fallbacks += 1;
@@ -2360,6 +2426,42 @@ pub async fn run_loop_impl(
             tokio::time::sleep(Duration::from_secs(cooldown)).await;
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LateEventRecovery {
+    NoLateEvents,
+    PendingWork,
+    Terminate(TerminationReason),
+}
+
+fn recover_late_events_before_fallback(
+    event_loop: &mut EventLoop,
+) -> std::io::Result<LateEventRecovery> {
+    let processed = event_loop.process_events_from_jsonl()?;
+
+    if let Some(reason) = event_loop.check_cancellation_event() {
+        return Ok(LateEventRecovery::Terminate(reason));
+    }
+
+    if let Some(reason) = event_loop.check_completion_event() {
+        return Ok(LateEventRecovery::Terminate(reason));
+    }
+
+    if event_loop.has_pending_events() {
+        return Ok(LateEventRecovery::PendingWork);
+    }
+
+    if processed.had_events || processed.has_orphans || processed.human_interact_context.is_some() {
+        debug!(
+            had_events = processed.had_events,
+            has_orphans = processed.has_orphans,
+            had_human_interact = processed.human_interact_context.is_some(),
+            "Late JSONL drain found events but no new pending work"
+        );
+    }
+
+    Ok(LateEventRecovery::NoLateEvents)
 }
 
 fn build_loop_start_payload_input(
@@ -4672,6 +4774,17 @@ printf '%s\n' "$payload" >> "$1""#
     #[cfg(unix)]
     fn dispatch_test_event_loop_with_context(workspace_root: &Path) -> (EventLoop, LoopContext) {
         let mut config = RalphConfig::default();
+        config.core.workspace_root = workspace_root.to_path_buf();
+        let context = LoopContext::primary(workspace_root.to_path_buf());
+        let event_loop = EventLoop::with_context(config, context.clone());
+        (event_loop, context)
+    }
+
+    fn dispatch_test_event_loop_from_yaml_with_context(
+        workspace_root: &Path,
+        yaml: &str,
+    ) -> (EventLoop, LoopContext) {
+        let mut config: RalphConfig = serde_yaml::from_str(yaml).expect("parse config");
         config.core.workspace_root = workspace_root.to_path_buf();
         let context = LoopContext::primary(workspace_root.to_path_buf());
         let event_loop = EventLoop::with_context(config, context.clone());
@@ -8229,5 +8342,88 @@ exit 73"#
             .expect("check responses");
 
         assert!(published.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_recover_late_events_before_fallback_routes_pending_work() {
+        use std::io::Write;
+
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let yaml = r#"
+hats:
+  investigator:
+    name: "Investigator"
+    triggers: ["debug.start", "hypothesis.rejected", "hypothesis.confirmed", "fix.verified"]
+    publishes: ["hypothesis.test", "fix.propose", "DEBUG_COMPLETE"]
+  tester:
+    name: "Tester"
+    triggers: ["hypothesis.test"]
+    publishes: ["hypothesis.confirmed", "hypothesis.rejected"]
+"#;
+        let (mut event_loop, loop_ctx) =
+            dispatch_test_event_loop_from_yaml_with_context(temp_dir.path(), yaml);
+        let events_path = loop_ctx.events_path();
+        std::fs::create_dir_all(events_path.parent().expect("events path parent"))
+            .expect("create events directory");
+
+        let mut events_file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&events_path)
+            .expect("open events file");
+        writeln!(
+            events_file,
+            r#"{{"topic":"hypothesis.test","payload":"Race condition suspected","ts":"2026-03-08T00:00:00Z"}}"#
+        )
+        .expect("write late event");
+        events_file.flush().expect("flush late event");
+
+        let outcome =
+            recover_late_events_before_fallback(&mut event_loop).expect("recover late events");
+        assert_eq!(outcome, LateEventRecovery::PendingWork);
+        assert_eq!(
+            event_loop.next_hat().map(|hat| hat.as_str()),
+            Some("ralph"),
+            "late downstream work should route the next iteration to Ralph in multi-hat mode"
+        );
+
+        let tester_id = HatId::new("tester");
+        let tester_pending = event_loop
+            .bus()
+            .peek_pending(&tester_id)
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(tester_pending.len(), 1);
+        assert_eq!(tester_pending[0].topic.as_str(), "hypothesis.test");
+    }
+
+    #[test]
+    fn test_recover_late_events_before_fallback_honors_completion() {
+        use std::io::Write;
+
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let (mut event_loop, loop_ctx) = dispatch_test_event_loop_with_context(temp_dir.path());
+        let events_path = loop_ctx.events_path();
+        std::fs::create_dir_all(events_path.parent().expect("events path parent"))
+            .expect("create events directory");
+
+        let mut events_file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&events_path)
+            .expect("open events file");
+        writeln!(
+            events_file,
+            r#"{{"topic":"LOOP_COMPLETE","payload":"done","ts":"2026-03-08T00:00:00Z"}}"#
+        )
+        .expect("write completion event");
+        events_file.flush().expect("flush completion event");
+
+        let outcome =
+            recover_late_events_before_fallback(&mut event_loop).expect("recover completion");
+        assert_eq!(
+            outcome,
+            LateEventRecovery::Terminate(TerminationReason::CompletionPromise)
+        );
     }
 }

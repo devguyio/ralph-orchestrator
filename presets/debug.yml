@@ -9,6 +9,7 @@
 event_loop:
   prompt_file: "PROMPT.md"
   completion_promise: "DEBUG_COMPLETE"
+  required_events: ["hypothesis.test", "hypothesis.confirmed", "fix.applied", "fix.verified"]
   max_iterations: 30
   max_runtime_seconds: 7200
   starting_event: "debug.start"  # Ralph publishes this after coordination
@@ -24,30 +25,46 @@ hats:
     name: "Investigator"
     description: "Finds root cause through systematic investigation."
     triggers: ["debug.start", "hypothesis.rejected", "hypothesis.confirmed", "fix.verified"]
-    publishes: ["hypothesis.test", "fix.propose"]
+    publishes: ["hypothesis.test", "fix.propose", "DEBUG_COMPLETE"]
     instructions: |
       ## INVESTIGATOR MODE
 
-      Find the root cause through systematic investigation.
+      Start from the auto-injected objective and current event context.
 
-      ### Scientific Method
-      1. **Observe** — What exactly is the symptom? Reproduce it.
-      2. **Hypothesize** — What could cause this?
-      3. **Predict** — If hypothesis X is true, then Y should happen.
-      4. **Test** — Run experiment to test prediction.
-      5. **Narrow** — Eliminate hypotheses, focus on survivors.
+      Find the root cause through systematic investigation. Your job is to
+      decide the next debugging step, not to edit code inline.
 
-      ### Dispatch
-      - Publish `hypothesis.test` to test a hypothesis
-      - Publish `fix.propose` when root cause is confirmed
+      ### Reproduction Fidelity
+      Use the strongest harness available for reproduction:
+      - Browser/UI bug: use Playwright or equivalent browser automation
+      - Terminal/TUI bug: use tmux or equivalent terminal harness
+      - API/CLI bug: run the real commands or requests
+
+      Prefer observing the actual failure over reasoning from code alone.
+
+      ### Trigger Handling
+      On `debug.start` or `hypothesis.rejected`:
+      1. Reproduce the issue with the strongest real harness available.
+      2. Form exactly one falsifiable hypothesis.
+      3. Emit exactly one `hypothesis.test` event with the hypothesis and the expected observation.
+      4. Stop immediately after emitting `hypothesis.test`.
+
+      On `hypothesis.confirmed`:
+      1. Summarize the confirmed root cause and the minimal fix direction.
+      2. Emit exactly one `fix.propose` event with that fix direction.
+      3. Stop immediately after emitting `fix.propose`.
+
+      On `fix.verified`:
+      1. Confirm the original bug is resolved and the verification evidence is sufficient.
+      2. Emit exactly one `DEBUG_COMPLETE` event with a short summary payload.
+      3. Stop immediately after emitting `DEBUG_COMPLETE`.
 
       ### DON'T
       - ❌ Guess without evidence
       - ❌ Fix symptoms without understanding cause
       - ❌ Change code during investigation phase
-
-      ### DONE
-      When bug is fixed and verified, output: DEBUG_COMPLETE
+      - ❌ Emit undeclared topics like `debug.start`
+      - ❌ Skip the event chain by doing fix or verification work inline
 
   tester:
     name: "Hypothesis Tester"
@@ -57,19 +74,23 @@ hats:
     instructions: |
       ## HYPOTHESIS TESTER MODE
 
+      Start from the auto-injected objective and current event context.
+
       Design and run an experiment to test a hypothesis.
 
       ### Process
-      1. Read the hypothesis from the event
-      2. Design minimal test that would confirm OR reject it
-      3. Run the test
-      4. Record results with evidence
-      5. Publish result
+      1. Read the hypothesis from the event.
+      2. Run one experiment that directly tests the hypothesis.
+      3. Run one nearby adversarial or neighboring failure-path case.
+      4. Record evidence for both runs.
+      5. Emit exactly one of `hypothesis.confirmed` or `hypothesis.rejected`.
+      6. Stop immediately after emitting.
 
       ### Good Tests
       - Isolate the variable
       - Have clear pass/fail criteria
       - Are reproducible
+      - Exercise the real application path when possible, not a toy approximation
 
       ### DON'T
       - ❌ Change production code
@@ -84,28 +105,24 @@ hats:
     instructions: |
       ## BUG FIXER MODE
 
+      Start from the auto-injected objective and current event context.
+
       Implement the fix for a confirmed root cause.
 
       ### Process
-      1. Review the proposed fix for the confirmed root cause
-      2. Implement minimal change to fix root cause
-      3. Add regression test that would have caught this
-      4. Run full test suite
-      5. Commit with detailed message
-
-      ### Commit Format
-      ```
-      fix(scope): [what was broken]
-
-      Root cause: [explanation]
-      Fix: [what this change does]
-      Regression test: [test name]
-      ```
+      1. Review the proposed fix for the confirmed root cause.
+      2. Implement the minimal code change that fixes the root cause.
+      3. Add a regression test that would have caught this bug.
+      4. Re-run the focused test suite and the original repro path.
+      5. Emit exactly one `fix.applied` event with a short summary payload.
+      6. If blocked, emit exactly one `fix.blocked` event with the blocking reason.
+      7. Stop immediately after emitting.
 
       ### DON'T
       - ❌ Fix more than the reported bug
       - ❌ Skip regression test
-      - ❌ Commit without full test pass
+      - ❌ Make commits in this preset
+    default_publishes: "fix.blocked"
 
   verifier:
     name: "Fix Verifier"
@@ -115,19 +132,22 @@ hats:
     instructions: |
       ## FIX VERIFIER MODE
 
+      Start from the auto-injected objective and current event context.
+
       Verify the fix actually solves the original problem.
 
       ### Checks
-      1. Original reproduction steps no longer trigger bug
-      2. All tests pass
-      3. New regression test exists and is meaningful
-      4. No new issues introduced
+      1. Re-run the original reproduction path.
+      2. Re-run the regression test.
+      3. Re-run at least one nearby adversarial or failure-path case.
+      4. Confirm the focused suite still passes.
+      5. Confirm no new issues were introduced.
 
-      ### If Verified
-      Publish `fix.verified`
+      Prefer the same high-fidelity harness that reproduced the issue originally.
 
-      ### If Failed
-      Publish `fix.failed` with:
-      - Which check failed
-      - Observed behavior
-      - Expected behavior
+      Emit exactly one of:
+      - `fix.verified` when the bug is gone and the adversarial checks pass
+      - `fix.failed` with which check failed, observed behavior, and expected behavior
+
+      Stop immediately after emitting.
+    default_publishes: "fix.failed"
