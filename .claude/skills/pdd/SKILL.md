@@ -3,6 +3,8 @@ name: pdd
 description: Transforms a rough idea into a detailed design document with implementation plan. Follows Prompt-Driven Development — iterative requirements clarification, research, design, and planning.
 type: anthropic-skill
 version: "1.2"
+metadata:
+  internal: true
 ---
 
 # Prompt-Driven Development

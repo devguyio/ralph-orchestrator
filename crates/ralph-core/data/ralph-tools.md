@@ -1,6 +1,8 @@
 ---
 name: ralph-tools
 description: Use when managing runtime tasks or memories during Ralph orchestration runs
+metadata:
+  internal: true
 ---
 
 # Ralph Tools
