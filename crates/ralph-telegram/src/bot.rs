@@ -47,7 +47,7 @@ impl TelegramBot {
     /// URL instead of the default `https://api.telegram.org`. This enables
     /// targeting a local mock server (e.g., `telegram-test-api`) for CI/CD.
     pub fn new(token: &str, api_url: Option<&str>) -> Self {
-        let mut bot = if cfg!(test) {
+        let bot = if cfg!(test) {
             let client = teloxide::net::default_reqwest_settings()
                 .no_proxy()
                 .build()
@@ -57,13 +57,7 @@ impl TelegramBot {
             teloxide::Bot::new(token)
         };
 
-        if let Some(url) = api_url {
-            if let Ok(parsed) = reqwest::Url::parse(url) {
-                bot = bot.set_api_url(parsed);
-            } else {
-                tracing::warn!(url = %url, "Invalid Telegram API URL — using default");
-            }
-        }
+        let bot = crate::apply_api_url(bot, api_url);
 
         Self { bot }
     }

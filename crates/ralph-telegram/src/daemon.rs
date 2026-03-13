@@ -247,12 +247,7 @@ async fn poll_updates(
     use teloxide::payloads::GetUpdatesSetters;
     use teloxide::requests::Requester;
 
-    let mut bot = teloxide::Bot::new(token);
-    if let Some(url) = api_url {
-        if let Ok(parsed) = reqwest::Url::parse(url) {
-            bot = bot.set_api_url(parsed);
-        }
-    }
+    let bot = crate::apply_api_url(teloxide::Bot::new(token), api_url);
     let request = bot
         .get_updates()
         .offset(offset)

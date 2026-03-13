@@ -194,12 +194,10 @@ impl TelegramService {
             TelegramError::Startup("no tokio runtime available for polling".to_string())
         })?;
 
-        let mut raw_bot = teloxide::Bot::new(&self.bot_token);
-        if let Some(url) = &self.api_url {
-            if let Ok(parsed) = reqwest::Url::parse(url) {
-                raw_bot = raw_bot.set_api_url(parsed);
-            }
-        }
+        let raw_bot = crate::apply_api_url(
+            teloxide::Bot::new(&self.bot_token),
+            self.api_url.as_deref(),
+        );
         let workspace_root = self.workspace_root.clone();
         let state_path = self.workspace_root.join(".ralph/telegram-state.json");
         let shutdown = self.shutdown.clone();

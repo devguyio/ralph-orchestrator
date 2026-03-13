@@ -3324,6 +3324,43 @@ RObot:
     }
 
     #[test]
+    fn test_robot_config_resolve_api_url_from_config() {
+        let config = RobotConfig {
+            enabled: true,
+            timeout_seconds: Some(300),
+            checkin_interval_seconds: None,
+            telegram: Some(TelegramBotConfig {
+                bot_token: Some("test-token".to_string()),
+                api_url: Some("http://localhost:8081".to_string()),
+            }),
+        };
+
+        if std::env::var("RALPH_TELEGRAM_API_URL").is_err() {
+            assert_eq!(
+                config.resolve_api_url(),
+                Some("http://localhost:8081".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn test_robot_config_resolve_api_url_none_without_config() {
+        let config = RobotConfig {
+            enabled: true,
+            timeout_seconds: Some(300),
+            checkin_interval_seconds: None,
+            telegram: Some(TelegramBotConfig {
+                bot_token: Some("test-token".to_string()),
+                api_url: None,
+            }),
+        };
+
+        if std::env::var("RALPH_TELEGRAM_API_URL").is_err() {
+            assert!(config.resolve_api_url().is_none());
+        }
+    }
+
+    #[test]
     fn test_robot_config_validate_with_config_token() {
         // Validation passes when bot_token is in config
         let robot = RobotConfig {
